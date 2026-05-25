@@ -32,11 +32,13 @@ defmodule MetaXRSmokeTest.Windows do
 
   @simulator_exe "MetaXRSimulator.exe"
 
-  @candidate_dirs [
-    Path.expand("MetaXRSimulator", Path.dirname(__ENV__.file)),
-    "C:/Program Files/Meta/Meta XR Simulator",
-    "C:/Program Files (x86)/Meta/Meta XR Simulator"
-  ]
+  @candidate_dirs (
+    [Path.expand("MetaXRSimulator", Path.dirname(__ENV__.file))] ++
+    (for v <- ["v201.0", "v200.0", "v199.0", ""],
+     do: "C:/Program Files/MetaXRSimulator/#{v}" |> String.trim_trailing("/")) ++
+    ["C:/Program Files/Meta/Meta XR Simulator",
+     "C:/Program Files (x86)/Meta/Meta XR Simulator"]
+  )
 
   @default_certs Path.expand(
     "../multiplayer-fabric-hosting/certs/crdb",
@@ -195,19 +197,29 @@ defmodule MetaXRSmokeTest.Windows do
   end
 
   defp activate_runtime(conn, install_dir) do
-    runtime_json = find_runtime_json(install_dir)
-    IO.puts("  [..] Setting OpenXR ActiveRuntime → #{runtime_json}")
+    activate_ps1 = Path.join(install_dir, "activate_simulator.ps1")
 
-    case write_registry("SOFTWARE\\Khronos\\OpenXR\\1", "ActiveRuntime", runtime_json) do
-      :ok ->
-        write_registry("SOFTWARE\\WOW6432Node\\Khronos\\OpenXR\\1", "ActiveRuntime",
-          String.replace(runtime_json, "_64", "_32", global: false))
-        IO.puts("  [ok] Registry updated")
-        record(conn, "activate_runtime", "ok", runtime_json)
+    if File.exists?(activate_ps1) do
+      IO.puts("  [..] Running #{activate_ps1}")
+      {out, code} = System.cmd("powershell", [
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", activate_ps1, "-MessageTime", "0"
+      ], stderr_to_stdout: true)
+      detail = String.trim(out)
+      if code != 0, do: raise("activate_simulator.ps1 failed: #{detail}")
+      IO.puts("  [ok] #{detail}")
+      record(conn, "activate_runtime", "ok", detail)
+    else
+      runtime_json = find_runtime_json(install_dir)
+      IO.puts("  [..] Setting OpenXR ActiveRuntime → #{runtime_json}")
 
-      {:error, reason} ->
-        record(conn, "activate_runtime", "error", reason)
-        raise "Registry write failed (run as admin?): #{reason}"
+      case write_registry("SOFTWARE\\Khronos\\OpenXR\\1", "ActiveRuntime", runtime_json) do
+        :ok ->
+          IO.puts("  [ok] Registry updated")
+          record(conn, "activate_runtime", "ok", runtime_json)
+        {:error, reason} ->
+          record(conn, "activate_runtime", "error", reason)
+          raise "Registry write failed (run as admin?): #{reason}"
+      end
     end
   end
 
